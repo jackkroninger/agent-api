@@ -1,69 +1,61 @@
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, BackgroundTasks
+from fastapi.responses import StreamingResponse
+from contextlib import asynccontextmanager
 import requests as rq
-from supabase import create_client
 import yaml
 from gotrue.errors import AuthApiError
 from fastapi.security import HTTPBearer
-from typing import Literal
-from pydantic import BaseModel
+from agent import graph, db
+from langgraph.checkpoint.redis import AsyncRedisSaver
+from utils import auth, errors, schemas
+import asyncpg
 
 with open("config.yml", "r") as f: config = yaml.safe_load(f)
 
-supabase = create_client(config["supabase"]["url"], config["supabase"]["key"])
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # before
+    app.state.graph = graph.workflow.compile(checkpointer=AsyncRedisSaver(config["redis"]["url"])) # compile graph w/ redis memory
+    app.state.db_pool = await asyncpg.create_pool(config["postgres"]["url"], min_size=5, max_size=20)
+    # async with app.state.db_pool.acquire() as conn:
+    #     app.state.insert_chat = await conn.prepare(
+    #         """
+    #         INSERT INTO chat_history(thread_id, role, content, created_at)
+    #         VALUES ($1, 'user', $2, $3),
+    #                ($1, 'ai',   $4, $5)
+    #         """
+    #     )
+    yield
+    # after
+    await app.state.db_pool.close()
 
-app = FastAPI()
-
+app = FastAPI(lifespan=lifespan)
 bearer = HTTPBearer()
-
-class UserAuthenticationFaliure(Exception):
-    def __init__(self, message):
-        self.message = message
-        super().__init__(self.message)
-
-class InvalidParameter(Exception):
-    def __init__(self, message):
-        self.message = message
-        super().__init__(self.message)
-
-class Response(BaseModel):
-    data: str | list | dict | None = None
-    error: str | None = None
-
-class Token(BaseModel):
-    token: str | None = None
-    error: str | None = None
-
-def check_token(token):
-    try:
-        response = supabase.auth.get_user(token)
-        return response
-    except AuthApiError as e:
-        raise UserAuthenticationFaliure("Invalid token")
     
-def get_history(userID: str, num: int): # get the full chat history from Redis/N8N 
-    resp = rq.get(
-        url="https://n8n.k7r.dev/webhook/get-history",
-        params={
-            "id": userID
-        }
-    ) # get the raw chat history
-    return_list = []
-    for item in resp.json(): # convert to json and reformat
-        if item["type"] == "ai":
-            msg_type = "assistant" # change "ai" to "assistant"
-        elif item["type"] == "human":
-            msg_type = "user" # change "human" to "user"
+# def get_history(userID: str, num: int): # get the full chat history from Redis/N8N 
+#     resp = rq.get(
+#         url="https://n8n.k7r.dev/webhook/get-history",
+#         params={
+#             "id": userID
+#         }
+#     ) # get the raw chat history
+#     return_list = []
+#     for item in resp.json(): # convert to json and reformat
+#         if item["type"] == "ai":
+#             msg_type = "assistant" # change "ai" to "assistant"
+#         elif item["type"] == "human":
+#             msg_type = "user" # change "human" to "user"
 
-        return_list.append({"role": msg_type, "msg": item["content"]}) # add message to return list
+#         return_list.append({"role": msg_type, "msg": item["content"]}) # add message to return list
 
-    return_list = list(reversed(return_list)) # reversed list (oldest messages first)
+#     return_list = list(reversed(return_list)) # reversed list (oldest messages first)
 
-    if len(return_list) > num: # limit to num messages
-        return_list = return_list[-num:]
+#     if len(return_list) > num: # limit to num messages
+#         return_list = return_list[-num:]
 
-    return return_list # return 
+#     return return_list # return 
 
-@app.post("/login", response_model=Token)
+@app.post("/login", response_model=schemas.Token)
 async def login(username: str, password: str):
     """
     Login with username and password.\n
@@ -72,40 +64,51 @@ async def login(username: str, password: str):
     Will return: `{"token": str}`
     """
     try:
-        response = supabase.auth.sign_in_with_password({"email": username,"password": password})
-        return {"token": response.session.access_token}
+        return {"token": auth.login(username, password)}
     except AuthApiError as e:
         return {"error": str(e)}
 
-@app.get("/master/{operation}", response_model=Response)
-async def master(operation: Literal["chat", "history"], prompt: str = None, num: int = 0, token: str = Depends(bearer)):
-    """
-    # Master Agent Endpoint
-    `/master/chat`:\n
-    Chat with the master agent.\n
-    `prompt` parameter is the prompt to send to the master agent.\n
-    Will return: `{"response": str}`\n
-    `/master/history`:\n
-    Returns the user's chat history with the master agent.\n
-    `num` parameter determines the number of messages to return. By default, `num` is 0. Meaning if nothing passed, function will respond with the entire chat history.\n
-    Will return: `{"history":[{"role": "assistant" | "user", "msg": str}]}`
-    """
+@app.get("/chat", response_model=None)
+async def chat(prompt: str, background: BackgroundTasks, token: str = Depends(bearer)):
+    input_time = await app.state.db_pool.fetchval("SELECT NOW()")
     try:
-        userID = check_token(token.credentials).user.id
-        if operation == "chat":
-            if not prompt: raise InvalidParameter("prompt is required for chat operation")
-            response = rq.get(
-                url="https://n8n.k7r.dev/webhook/master-agent",
-                params={
-                    "sessionId": str(userID),
-                    "chatInput": str(prompt)
-                }
+        userID = auth.check_token(token.credentials).user.id
+
+        userID = "0011"
+
+        ai_msg_buffer = []
+
+        async def event_generator():
+            async for piece in graph.chat(prompt, str(userID), app):
+                ai_msg_buffer.append(piece)         # collect for later
+                yield piece  
+
+            # log input chat
+            background.add_task(
+                db.log_chat,
+                app,
+                userID,
+                prompt,
+                "".join(ai_msg_buffer),
+                input_time
             )
-            return {"data": response.json()["output"]}
-        elif operation == "history":
-            return {"data": get_history(userID, num)}
         
-    except UserAuthenticationFaliure as e:
+        return StreamingResponse(event_generator())
+    except errors.UserAuthenticationFaliure as e:
         return {"error": e.message}
-    except InvalidParameter as e:
+    except errors.InvalidParameter as e:
         return {"error": e.message}
+    
+@app.get("/history", response_model=schemas.Response)
+async def history(token: str = Depends(bearer), num: int = 0):
+    try:
+        userID = auth.check_token(token.credentials).user.id
+        userID = "0011"
+        return {"data": await db.get_chat(app, userID, num)}
+    
+    except errors.UserAuthenticationFaliure as e:
+        return {"error": e.message}
+    
+# TODO infrustructure is done. Chat msgs are logged after request processes, retrival is working
+# TODO add prompt templating to agent to better structure system prompts
+# TODO finish following tutorial for basic chatbot functionality
