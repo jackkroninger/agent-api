@@ -50,7 +50,7 @@ async def chat(prompt: str, background: BackgroundTasks, token: str = Depends(be
         ai_msg_buffer = []
 
         async def event_generator():
-            async for piece in graph.chat(prompt, str(userID), app):
+            async for piece in graph.chat(msg=prompt, _id=str(userID), app=app):
                 ai_msg_buffer.append(piece)         # collect for later
                 yield piece  
 
