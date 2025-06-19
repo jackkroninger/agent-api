@@ -2,9 +2,14 @@ import asyncio
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import HumanMessage, AIMessage
 from langgraph.checkpoint.redis import AsyncRedisSaver
-from langgraph.graph import START, MessagesState, StateGraph, END
+from langgraph.graph import START, StateGraph, END
+from langgraph.graph.message import add_messages
 import os, yaml
 from fastapi import FastAPI
+from typing import Annotated
+from typing_extensions import TypedDict
+
+
 
 with open("config.yml") as f: config = yaml.safe_load(f)
 
@@ -15,21 +20,23 @@ model = init_chat_model(
     model_provider="google_genai" 
     )
 
-async def call_model(state: MessagesState): # graph `model` node
+tools = []
+
+model = model.bind_tools(tools)
+
+class State(TypedDict):
+    # Messages have the type "list". The `add_messages` function
+    # in the annotation defines how this state key should be updated
+    # (in this case, it appends messages to the list, rather than overwriting them)
+    messages: Annotated[list, add_messages]
+
+async def call_model(state: State): # graph `model` node
     return {"messages": await model.ainvoke(state["messages"])} # async invoke model
 
-workflow = StateGraph(state_schema=MessagesState) # create graph
+workflow = StateGraph(state_schema=State) # create graph
 workflow.add_edge(START, "model") # add connection from start to model
 workflow.add_node("model", call_model) # create model node
 workflow.add_edge("model", END) # add connection from model to end
-
-# async def build():
-#     memory = AsyncRedisSaver(config["redis"]["url"]) # create redis saver for chat history
-
-#     global graph
-#     graph = workflow.compile(checkpointer=memory) # compile graph
-
-# asyncio.run(build())
 
 async def chat(msg: str, _id: str, app: FastAPI): 
     async for chunk, metadata in app.state.graph.astream( # iterate over chunks streamed from model
