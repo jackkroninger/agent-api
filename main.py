@@ -15,7 +15,9 @@ with open("config.yml", "r") as f: config = yaml.safe_load(f)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # before
-    app.state.graph = graph.workflow.compile(checkpointer=AsyncRedisSaver(config["redis"]["url"])) # compile graph w/ redis memory
+    checkpointer = AsyncRedisSaver(config["redis"]["url"])
+    await checkpointer.asetup()
+    app.state.graph = graph.workflow.compile(checkpointer=checkpointer) # compile graph w/ redis memory
     app.state.db_pool = await asyncpg.create_pool(config["postgres"]["url"], min_size=5, max_size=20)
     # async with app.state.db_pool.acquire() as conn:
     #     app.state.insert_chat = await conn.prepare(

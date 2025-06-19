@@ -6,3 +6,4 @@ langgraph==0.4.8
 langchain[google-genai]
 langgraph-checkpoint-redis==0.0.6
 redis==6.2.0
+asyncpg==0.30.0
