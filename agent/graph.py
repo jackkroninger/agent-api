@@ -44,6 +44,7 @@ class State(TypedDict):
     messages: Annotated[list, add_messages]
     user_id: str
     thread_id: str
+    app: FastAPI | None
 
 async def call_agent(state: State): # graph `model` node
     prompt = await prompt_template.ainvoke(state)
@@ -65,11 +66,10 @@ workflow.add_conditional_edges("model", tools_condition)
 workflow.add_edge("tools", "model")
 workflow.add_edge(START, "model") # add connection from start to model
 
-async def chat(msg: str, _id: str, graph: Union[FastAPI, CompiledStateGraph], user_id: str = None): 
+async def chat(msg: str, _id: str, app: Union[FastAPI, CompiledStateGraph], user_id: str = None): 
     cfig = {"configurable": {"thread_id": _id}}
-    if type(graph) == FastAPI: 
-        app = graph
-        await app.state.graph.aupdate_state(cfig,values={"user_id": user_id, "thread_id": _id})
+    if type(app) == FastAPI: 
+        await app.state.graph.aupdate_state(cfig,values={"user_id": user_id, "thread_id": _id, "app": app})
         async for chunk, metadata in app.state.graph.astream( # iterate over chunks streamed from model
                 {"messages": [HumanMessage(msg)], "language": "English"}, # pass user input to model
                 cfig, # pass config to model
@@ -77,8 +77,9 @@ async def chat(msg: str, _id: str, graph: Union[FastAPI, CompiledStateGraph], us
                 ):
             if isinstance(chunk, AIMessage): # if chunk is an AIMessage (not human message)
                 yield chunk.content
-    elif type(graph) == CompiledStateGraph:
-        await graph.aupdate_state(cfig,values={"user_id": user_id, "thread_id": _id})
+    elif type(app) == CompiledStateGraph:
+        graph = app
+        await graph.aupdate_state(cfig,values={"user_id": user_id, "thread_id": _id, "app": None})
         async for chunk, metadata in graph.astream( # iterate over chunks streamed from model
                 {"messages": [HumanMessage(msg)], "language": "English"}, # pass user input to model
                 cfig, # pass config to model
