@@ -1,7 +1,7 @@
 from supabase import create_client
 import yaml
 from gotrue.errors import AuthApiError
-from utils.errors import UserAuthenticationFaliure
+from utils.errors import UserAuthenticationFaliure, GoogleOauthFaliure
 from utils.schemas import Token
 from utils.database import write_oath_token, get_oath_token, update_oath_token
 from googleapiclient.discovery import build
@@ -41,17 +41,17 @@ def generate_auth_url(app: FastAPI):
 async def get_google_oauth_creds(app: FastAPI, user_id: str):
     creds = await get_oath_token(app, user_id)
     if creds and creds.valid:
-        return creds, True
+        return creds
     # If there are no (valid) credentials available, let the user log in.
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
             await update_oath_token(app, user_id, creds.to_json())
-            return creds, True
+            return creds
         else:
             auth_url, callbacktoken = generate_auth_url(app)
             if not get_oath_token(app, user_id):
                 await write_oath_token(app, user_id, json.dumps({"token":f"{callbacktoken}"}))
             else:
                 await update_oath_token(app, user_id, json.dumps({"token":f"{callbacktoken}"}))
-            return auth_url, False
+            raise GoogleOauthFaliure(f"The user's Google Oauth credentials expired. Please instruct the user to sign in using the following link and retry the request: {auth_url}")

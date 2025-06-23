@@ -45,28 +45,21 @@ async def login(username: str, password: str):
         return {"error": str(e)}
 
 @app.get("/chat", response_model=None)
-async def chat(prompt: str, background: BackgroundTasks, token: str = Depends(bearer)):
+async def chat(prompt: str, thread_id: str, background: BackgroundTasks, token: str = Depends(bearer)):
     input_time = await app.state.db_pool.fetchval("SELECT NOW()")
     try:
         userID = auth.check_token(token.credentials).user.id
 
-        userID = "0011"
+        # print(app.__dict__)
 
         ai_msg_buffer = []
         async def event_generator():
-            async for piece in graph.chat(msg=prompt, _id=str(userID), graph=app):
+            async for piece in graph.chat(msg=prompt, _id=thread_id, app=app, user_id=userID):
                 ai_msg_buffer.append(piece)         # collect for later
                 yield piece  
 
             # log input chat
-            background.add_task(
-                database.log_chat,
-                app,
-                userID,
-                prompt,
-                "".join(ai_msg_buffer),
-                input_time
-            )
+            background.add_task(database.log_chat, app, userID, prompt, "".join(ai_msg_buffer), input_time)
         
         return StreamingResponse(event_generator())
     except errors.UserAuthenticationFaliure as e:
@@ -92,8 +85,6 @@ async def oath2token(bg: BackgroundTasks, token: str = Depends(bearer)):
         service = await google_cal.cal_test(app, userID)
         return {"data": service}
     except errors.UserAuthenticationFaliure as e:
-        return {"error": e.message}
-    except errors.GoogleOauthFaliure as e:
         return {"error": e.message}
     
 @app.get("/oauth2callback", response_model=schemas.Response)
