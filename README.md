@@ -1,6 +1,14 @@
-Create `config.yml` file in project directory with following structure:
-```
-supabase:
-  url: supabase_api_url
-  key: supabase_service_user_secret
-```
+This project is a backend interface for interacting with an agent powered by Google Gemini models. The primary goal of this agent is to be a scheduling assitant by interacting with the users' Google Calendar. 
+
+## API
+The API is built using FastAPI with a local instance of Supabase to handle user authentication and Postgres management. When the FastAPI object is initialized and the lifespan function is executed, the graph (agent) and Postgres connection pool are generated. These objects are created in the FastAPI event loop to take advantages of the async handling as well as FastAPI's multi-worker functionality. By storing these objects in the app's state, the app object can be passed multiple layers deep to allow async functions in the code to execute database operations from anywhere. While this means the agent is tightly coupled to the API, I think the benefits overpower the cons by allowing for additional agents to be integrated into a single API as long as they follow strict parameter constraints.
+
+The API also handles user authentication by providing a POST login endpoint that takes plaintext user and pass in the body, using Supabase to handle hashing and indexing, and if the credentials are good returning a bearer token to the user. This token goes in the auth header allowing all other endpoints (that need auth) to decode your token to get the ID they need to get information from the database.
+
+## Agent
+I used LangChain and LangGraph to structure the agent execution and flow. This seemed like the logical choice due to their convinient abstraction and wide community support. They have proven to be great tools that made the development and itteration of the agent easy. So far this is structures as a simple 2 node graph with one conditional edge. This is fairly standard for simple agents designed to call tools. 
+
+In the future I plan to add a node between the start and call_agent nodes that would search a vector database of "long term memories" that would be added into the prompt passed to the model. This would allow the model to have better context of the user it is speaking with as well as some precedural memory if the user makes requests in a specific way. I also plan to implement "token saving" measures to minimize api costs. Some of these include a small, fine-tuned model running on local hardware that could condense chat history and long term memory, a local semantic categorization model that would route requests to larger/smaller models that are more efficient for that task, precedural memory, meaning if the agent can better remember precedures, I could minimize system instructions.
+
+## Google Integration
+I am using the Google Cloud Oauth2 system for user authentication. When users make a request for the first time, and the agent invokes the calendar tool, it will reurn a message instructing the agent to pass the Google oauth link to the user. Once clicked, the user signs into Google and authorizes access to the calendar. This sends a callback to an endpoint in app.py retrieving the new token and an fingerprint. An identical fingerprint was generated at the time the link was created. I used this link to create a temporary entry in a database table with this fingerprint as an ID. When I recieved the fingerprint in the callback endpoint, I search the Postgres table for the entry matching the fingerprint and overwrite the data with the token from Google. Now when user's interact again and the agent invokes the tool, it will pull the token from the table with the entry matching the user's ID (pulled directly from state into tool), allowing the tool handler to create credentials and ultimately a "calendar service" to be passed to the operational functions.
