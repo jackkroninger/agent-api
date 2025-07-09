@@ -11,7 +11,7 @@ import os, yaml
 from fastapi import FastAPI
 from typing import Annotated, Union
 from typing_extensions import TypedDict
-from agent.tools import weather
+from agent.tools import weather, google_cal
 from agent.prompts import prompt_template
 from utils.loggers import TrainingDataLogger
 import pprint
@@ -28,7 +28,7 @@ model = init_chat_model(
     temperature=0
     )
 
-tools = [weather.get_weather]
+tools = [google_cal.tool]
 
 model = model.bind_tools(tools)
 
@@ -65,10 +65,9 @@ workflow.add_conditional_edges("model", tools_condition)
 workflow.add_edge("tools", "model")
 workflow.add_edge(START, "model") # add connection from start to model
 
-async def chat(msg: str, _id: str, graph: Union[FastAPI, CompiledStateGraph], user_id: str = None): 
-    cfig = {"configurable": {"thread_id": _id}}
-    if type(graph) == FastAPI: 
-        app = graph
+async def chat(msg: str, _id: str, app: Union[FastAPI, CompiledStateGraph], user_id: str = None): 
+    cfig = {"configurable": {"thread_id": _id, "app": app, "user_id": user_id}}
+    if type(app) == FastAPI: 
         await app.state.graph.aupdate_state(cfig,values={"user_id": user_id, "thread_id": _id})
         async for chunk, metadata in app.state.graph.astream( # iterate over chunks streamed from model
                 {"messages": [HumanMessage(msg)], "language": "English"}, # pass user input to model
@@ -77,7 +76,8 @@ async def chat(msg: str, _id: str, graph: Union[FastAPI, CompiledStateGraph], us
                 ):
             if isinstance(chunk, AIMessage): # if chunk is an AIMessage (not human message)
                 yield chunk.content
-    elif type(graph) == CompiledStateGraph:
+    elif type(app) == CompiledStateGraph:
+        graph = app
         await graph.aupdate_state(cfig,values={"user_id": user_id, "thread_id": _id})
         async for chunk, metadata in graph.astream( # iterate over chunks streamed from model
                 {"messages": [HumanMessage(msg)], "language": "English"}, # pass user input to model
