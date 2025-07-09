@@ -2,7 +2,6 @@ from fastapi import FastAPI, Depends, BackgroundTasks, Request
 from fastapi.responses import StreamingResponse
 from contextlib import asynccontextmanager
 import requests as rq
-import yaml
 from gotrue.errors import AuthApiError
 from fastapi.security import HTTPBearer
 from agent import graph
@@ -11,7 +10,9 @@ from langgraph.checkpoint.redis import AsyncRedisSaver
 from utils import auth, errors, schemas, database
 import asyncpg
 from google_auth_oauthlib.flow import InstalledAppFlow
-import json
+import json, os, yaml
+
+os.makedirs('logs/', exist_ok=True)
 
 
 with open("config.yml", "r") as f: config = yaml.safe_load(f)
@@ -96,9 +97,3 @@ async def oauth2callback(request: Request):
     return {
         "data": "Credentials updated successfully"
     }
-
-    
-# TODO infrustructure is done. Chat msgs are logged after request processes, retrival is working
-# TODO add prompt templating to agent to better structure system prompts
-# TODO finish following tutorial for basic chatbot functionality
-
