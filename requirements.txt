@@ -2,6 +2,7 @@ fastapi[standard]
 pyaml==25.5.0
 supabase==2.15.2
 langchain-core==0.3.63
+langgraph-prebuilt==0.2.2
 langgraph==0.4.8
 langchain[google-genai]
 langgraph-checkpoint-redis==0.0.6
