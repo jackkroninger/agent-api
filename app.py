@@ -33,13 +33,19 @@ app = FastAPI(lifespan=lifespan)
 bearer = HTTPBearer()
 
 @app.post("/login", response_model=schemas.Token)
-async def login(username: str, password: str):
+async def login(username: str = None, password: str = None, token: str = None):
     """
     Login with username and password.\n
     `username` parameter is the email of the user.\n
     `password` parameter is the plaintext password of the user.\n
     Will return: `{"token": str}`
     """
+    if token:
+        try:
+            token_check = auth.check_token(token)
+            return {"token": token}
+        except errors.UserAuthenticationFaliure as e:
+            return {"error": e.message, "token": None}
     try:
         return {"token": auth.login(username, password)}
     except AuthApiError as e:
@@ -62,18 +68,17 @@ async def chat(prompt: str, thread_id: str, background: BackgroundTasks, token: 
             # log input chat
             background.add_task(database.log_chat, app, userID, prompt, "".join(ai_msg_buffer), input_time)
         
-        return StreamingResponse(event_generator())
+        return StreamingResponse(event_generator(), media_type="text/event-stream")
     except errors.UserAuthenticationFaliure as e:
         return {"error": e.message}
     except errors.InvalidParameter as e:
         return {"error": e.message}
     
 @app.get("/history", response_model=schemas.Response)
-async def history(token: str = Depends(bearer), num: int = 0):
+async def history(thread_id: str, token: str = Depends(bearer), num: int = 0):
     try:
         userID = auth.check_token(token.credentials).user.id
-        userID = "0011"
-        return {"data": await database.get_chat(app, userID, num)}
+        return {"data": await database.get_chat(app, thread_id, num)}
     
     except errors.UserAuthenticationFaliure as e:
         return {"error": e.message}

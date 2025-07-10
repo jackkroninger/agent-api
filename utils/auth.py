@@ -36,7 +36,7 @@ def generate_auth_url(app: FastAPI):
         # Enable offline access so that you can refresh an access token without
         # re-prompting the user.
         access_type='offline',
-        # prompt='consent'
+        prompt='consent'
         )
 async def get_google_oauth_creds(app: FastAPI, user_id: str):
     creds = await get_oath_token(app, user_id)
@@ -50,7 +50,7 @@ async def get_google_oauth_creds(app: FastAPI, user_id: str):
             return creds
         else:
             auth_url, callbacktoken = generate_auth_url(app)
-            if not get_oath_token(app, user_id):
+            if not await get_oath_token(app, user_id):
                 await write_oath_token(app, user_id, json.dumps({"token":f"{callbacktoken}"}))
             else:
                 await update_oath_token(app, user_id, json.dumps({"token":f"{callbacktoken}"}))

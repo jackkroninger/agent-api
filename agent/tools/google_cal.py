@@ -83,7 +83,7 @@ async def tool(
     kwargs: Union[CreateEvent, GetEvent, UpdateEvent, DeleteEvent, GetManyEvents], 
     config: RunnableConfig
     ) -> str:
-
+    print("tool invoked")
 
     user_id: str = config["configurable"].get("user_id")
     app: FastAPI = config["configurable"].get("app")
@@ -108,6 +108,7 @@ async def tool(
         return "Invalid action. Please choose one of 'create', 'get', 'get_many', 'update', or 'delete'"
 
 async def gcal_create_event(service: Resource, kwargs: CreateEvent):
+    print("create event invoked")
     body = {
         "colorId": None, # The color of the event. This is an ID referring to an entry in the event section of the colors definition (see the  colors endpoint).
         "summary": kwargs["summary"],
@@ -131,6 +132,7 @@ async def gcal_create_event(service: Resource, kwargs: CreateEvent):
     return result # TODO parse
 
 async def gcal_get_event(service: Resource, kwargs: GetEvent):
+
     result = service.events().get(
         calendarId='primary',
         eventId=kwargs["eventId"]
