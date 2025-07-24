@@ -14,7 +14,6 @@ import json, os, yaml
 
 os.makedirs('logs/', exist_ok=True)
 
-
 with open("config.yml", "r") as f: config = yaml.safe_load(f)
 
 @asynccontextmanager
@@ -52,7 +51,14 @@ async def login(username: str = None, password: str = None, token: str = None):
         return {"error": str(e)}
 
 @app.get("/chat", response_model=None)
-async def chat(prompt: str, thread_id: str, background: BackgroundTasks, token: str = Depends(bearer)):
+async def chat(
+        prompt: str, 
+        thread_id: str, 
+        background: BackgroundTasks,
+        request: Request,
+        token: str = Depends(bearer)
+    ):
+
     input_time = await app.state.db_pool.fetchval("SELECT NOW()")
     try:
         userID = auth.check_token(token.credentials).user.id
