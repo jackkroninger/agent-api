@@ -6,8 +6,12 @@ langgraph-prebuilt==0.2.2
 langgraph==0.4.8
 langchain[google-genai]
 langgraph-checkpoint-redis==0.0.6
+langgraph-checkpoint-postgres==2.0.23
 redis==6.2.0
 asyncpg==0.30.0
 google-api-python-client==2.173.0
 google-auth-httplib2==0.2.0
 google-auth-oauthlib==1.2.2
+sqlmodel==0.0.24
+psycopg2==2.9.10
+greenlet==3.2.3
