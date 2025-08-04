@@ -1,57 +1,57 @@
 from supabase import create_client
-import yaml
+import yaml, jwt
 from gotrue.errors import AuthApiError
-from utils.errors import UserAuthenticationFaliure, GoogleOauthFaliure
+from utils.errors import UserAuthenticationFaliure, JWTError
 from utils.schemas import Token
-from utils.database import write_oath_token, get_oath_token, update_oath_token
 from googleapiclient.discovery import build
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
-import os.path
-import pickle
-from fastapi import FastAPI
-import json
+from sqlmodel.ext.asyncio.session import AsyncSession
+from fastapi import Depends, FastAPI
+from utils.postgres import get_async_session, User
+from sqlmodel import select
+from argon2 import PasswordHasher
+from argon2.exceptions import VerifyMismatchError
+from datetime import datetime, timedelta
 
 
 with open("config.yml", "r") as f: config = yaml.safe_load(f)
 
-supabase = create_client(config["supabase"]["url"], config["supabase"]["key"])
+ph = PasswordHasher()
 
-def check_token(token): # supabase
+
+def generate_token(user_id: str) -> str:
+    return str(jwt.encode(
+        payload={
+            "user_id": user_id,
+            "exp": datetime.now() + timedelta(days=config["jwt"]["exp"])
+        },
+        key=config["jwt"]["secret_key"],
+        algorithm=config["jwt"]["algorithm"]
+    ))
+
+def check_token(token: str) -> str:
     try:
-        response = supabase.auth.get_user(token)
-        return response
-    except AuthApiError as e:
-        raise UserAuthenticationFaliure("Invalid token")
-    
-def login(username: str, password: str) -> str: # supabase
-    try:
-        response = supabase.auth.sign_in_with_password({"email": username,"password": password})
-        return response.session.access_token
-    except AuthApiError as e:
+        decoded = jwt.decode(token, config["jwt"]["secret_key"], algorithms=[config["jwt"]["algorithm"]])
+        if decoded["exp"] >= datetime.now(): raise JWTError("Token expired")
+        return decoded["user_id"]
+    except JWTError as e:
         raise e
 
-def generate_auth_url(app: FastAPI):
-    return app.state.google_oauth_flow.authorization_url(
-        # Enable offline access so that you can refresh an access token without
-        # re-prompting the user.
-        access_type='offline',
-        prompt='consent'
-        )
-async def get_google_oauth_creds(app: FastAPI, user_id: str):
-    creds = await get_oath_token(app, user_id)
-    if creds and creds.valid:
-        return creds
-    # If there are no (valid) credentials available, let the user log in.
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-            await update_oath_token(app, user_id, creds.to_json())
-            return creds
-        else:
-            auth_url, callbacktoken = generate_auth_url(app)
-            if not await get_oath_token(app, user_id):
-                await write_oath_token(app, user_id, json.dumps({"token":f"{callbacktoken}"}))
-            else:
-                await update_oath_token(app, user_id, json.dumps({"token":f"{callbacktoken}"}))
-            raise GoogleOauthFaliure(f"The user's Google Oauth credentials expired. Please instruct the user to sign in using the following link and retry the request: {auth_url}")
+async def login(
+        email: str,
+        password: str,
+        db: AsyncSession = Depends(get_async_session)
+    ) -> str:
+
+    statement = select(User).where(User.email == email)
+    try:
+        user = await db.exec(statement).first()
+
+        ph.verify(user.password, password)
+
+        return generate_token(user.id)
+        
+    except VerifyMismatchError:
+        raise UserAuthenticationFaliure("Invalid credentials")
+    # TODO catch error for user not found

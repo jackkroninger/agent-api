@@ -11,61 +11,57 @@ from langchain_core.messages import AIMessage, HumanMessage
 from utils.nodes import create_prompt, create_agent, node_list
 from typing import Union, Literal, Optional
 from langgraph.types import Command
+from graph.tools import supervisor as supervisor_tools
 
 td_logger = TrainingDataLogger(__name__)
-
-memoriesDB = MemoryDB()
 
 with open("config.yml") as f: config = yaml.safe_load(f)
 
 NODE_CONFIG = {
-    "model": "mistral-small-2506	",
+    "model": "mistral-small-2506",
     "model_provider": "mistralai",
     "temperature": 0,
-    "prompt": "prompts/router.txt"
+    "prompt": "prompts/supervisor.txt"
 }
 
 with open(NODE_CONFIG["prompt"]) as f: INSTRUCTIONS: str = f.read()
 
 os.environ["MISTRAL_API_KEY"] = config["mistral"]["key"]
 
-ROUTES = ["scheduling_agent"]
-
 class ModelOutput(BaseModel):
-    route: Literal["scheduling_agent"] = Field(description=f"Key of the subgraph/agent to call as a string. The options are: {', '.join(ROUTES)}")
-    search_memories: Optional[str] = Field(description="(Optional) Search term for long term memory database")
-
+    content: Optional[str] = Field(description="Response to the user or prompt to the agent")
+    tool: Optional[str] = Field(description="Tool to invoke")
+    agent: Optional[str] = Field(description="Agent to call")
+    memory_action: Optional[str] = Field(description="Memory action to take: 'add' or 'get', followed by the query. For example: 'add: memory text' or 'get: query text'")
+    
 
 MODEL = create_agent(
     NODE_CONFIG["model"], # model name
     NODE_CONFIG["model_provider"],
     NODE_CONFIG["temperature"],
     structured_out=ModelOutput
+    # tools=supervisor_tools.tool_list
     )
 
 PROMPT = create_prompt(INSTRUCTIONS)
 
+AGENT = create_react_agent(
+    MODEL,
+    []
+)
 
-async def invoke(state: State, cfg: RunnableConfig) -> Command[Literal["scheduling_agent"]]: # graph `model` node
-    resp: ModelOutput = await MODEL.ainvoke(await PROMPT.ainvoke(state["messages"]))
 
-    # if the "search memories" is not none, search the long term memory database
-    # attach the memories to the prompt and return the response with the route
-    if resp.search_memories:
-        raw_memories = memoriesDB.search(resp.search_memories, cfg["configurable"].get("user_id"))
-        parsed_memories = [memory["document"] for memory in raw_memories]
-        new_prompt = f"User prompt: {str(state['messages'][-1]["content"])}\nMemories relating to '{resp.search_memories}':{', '.join(parsed_memories)}."
-    else:
-        new_prompt = f"User prompt: {str(state['messages'][-1]['content'])}"
+async def invoke(state: State, cfg: RunnableConfig): # graph `model` node
+    resp = await AGENT.ainvoke(await PROMPT.ainvoke(state))
+
+    print(resp)
+    print(dict(resp))
+
 
     td_logger.log({
-        "node": "router",
         "user": dict(state["messages"][-1]),
         "ai": dict(resp["messages"][-1]),
         "thread_id": cfg["configurable"].get("thread_id"), 
         "user_id": cfg["configurable"].get("user_id")
     })
-    return Command(
-        update={"messages": [HumanMessage(new_prompt)]},
-        goto=resp.route
-    )
+    return {"messages": [resp]}

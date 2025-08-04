@@ -4,6 +4,14 @@ from typing import Optional, Annotated
 import json
 import pprint
 
+class ChatBody(BaseModel):
+    prompt: str
+    thread_id: str
+
+
+class LoginBody(BaseModel):
+    username: str
+    password: str
 
 class Response(BaseModel):
     data: str | list | dict | None = None

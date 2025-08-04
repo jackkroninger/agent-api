@@ -4,5 +4,6 @@ __all__ = [
     "research_agent",
     "scheduling_agent",
     "router",
-    "evaluator"
+    "evaluator",
+    "supervisor"
 ]

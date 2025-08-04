@@ -1,49 +1,77 @@
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import START, StateGraph, END
 from langgraph.prebuilt import ToolNode, tools_condition
+from langgraph.graph.state import CompiledStateGraph
 from graph.state import State
-from graph import tools, nodes
+from graph.nodes import supervisor, scheduling_agent, evaluator
+from graph.tools import scheduling_agent as sa_tools
+from graph.tools import supervisor as sup_tools
 import os, yaml
+from pydantic import BaseModel
+from langchain_core.messages import HumanMessage, AIMessage
+from typing import Literal
+from fastapi import Depends
+from utils import postgres as pg
 
 with open("config.yml") as f: config = yaml.safe_load(f)
 
-class GraphCompiler:
-    async def __init__(self):
-        self.graph = StateGraph(state_schema=State)
-        checkpointer = AsyncPostgresSaver(config["postgres"]["url"],)
+class CompiledGraph(BaseModel):
+    graph: CompiledStateGraph
+
+    class Config:
+        arbitrary_types_allowed = True
+
+    async def chat(self, msg: str, thread_id: str, user_id: str, stream: bool = False, memory_db: pg.MemoryDB = Depends(pg.MemoryDB), user_db: pg.Session = Depends(pg.get_async_session)):
+        cfg = {
+            "configurable": {
+                "thread_id": thread_id, 
+                "user_id": user_id,
+                "memory_db": memory_db,
+                "user_db": user_db
+            }
+        }
+        if stream:
+            async for chunk, metadata in self.graph.astream( # iterate over chunks streamed from model
+                    {"messages": [HumanMessage(msg)], "language": "English"}, # pass user input to model
+                    cfg, # pass config to model
+                    stream_mode="messages",
+
+                    ):
+                
+                if isinstance(chunk, AIMessage): # if chunk is an AIMessage (not human message)
+                    yield chunk.content
+        else:
+            yield await self.graph.ainvoke(
+                {"messages": [HumanMessage(msg)], "language": "English"}, # pass user input to model
+                cfg
+            )
+
+
+async def GraphCompiler(checkpoint: Literal["langsmith", None] = None) -> CompiledGraph:
+    graph = StateGraph(state_schema=State)
+    if not checkpoint:
+        checkpointer = AsyncPostgresSaver(config["postgres"]["uri"],)
         checkpointer.setup()
 
-        """ Create Nodes"""
-        self.graph.add_node("router", nodes.router.invoke) # create router node
+    """ Create Nodes"""
+    graph.add_node("supervisor", supervisor.invoke) # create supervisor node
+    graph.add_node("scheduling_agent", scheduling_agent.invoke) # create scheduling agent node
+    # graph.add_node("scheduling_agent_tools", ToolNode(sa_tools.tk.tools))
+    graph.add_node("supervisor_tools", sup_tools.tool_node)
 
-        self.graph.add_node("scheduling_agent", nodes.scheduling_agent.invoke) # create scheduling agent node
-        self.graph.add_node("scheduling_agent_tools", ToolNode(tools.scheduling_agent.TOOLS))
 
-        self.graph.add_node("research_agent", nodes.research_agent.invoke) # create scheduling agent node
-        self.graph.add_node("research_agent_tools", ToolNode(tools.research_agent.TOOLS))
+    """ Create Edges """
+    graph.add_edge(START, "supervisor") # add connection from start to supervisor
+    # graph.add_conditional_edges("router", lambda state: state["route"]) # add connection from router to next node
 
-        self.graph.add_node("it_agent", nodes.it_agent.invoke) # create scheduling agent node
-        self.graph.add_node("it_agent_tools", ToolNode(tools.it_agent.TOOLS))
+    # graph.add_conditional_edges("scheduling_agent", tools_condition, {END: "evaluator"})
+    # graph.add_edge("scheduling_agent_tools", "scheduling_agent")
 
-        self.graph.add_node("dev_agent", nodes.dev_agent.invoke) # create scheduling agent node
-        self.graph.add_node("dev_agent_tools", ToolNode(tools.dev_agent.TOOLS))
-
-        self.graph.add_node("evaluator", nodes.evaluator.invoke) # create evaluator node
-
-        """ Create Edges """
-        self.graph.add_edge(START, "router") # add connection from start to router
-        self.graph.add_conditional_edges("router", lambda state: state["route"]) # add connection from router to next node
-
-        self.graph.add_conditional_edges("scheduling_agent", tools_condition, {END: "evaluator"})
-        self.graph.add_edge("scheduling_agent_tools", "scheduling_agent")
-
-        self.graph.add_conditional_edges("research_agent", tools_condition, {END: "evaluator"})
-        self.graph.add_edge("research_agent_tools", "research_agent")
-
-        self.graph.add_conditional_edges("it_agent", tools_condition, {END: "evaluator"})
-        self.graph.add_edge("it_agent_tools", "it_agent")
-
-        self.graph.add_conditional_edges("dev_agent", tools_condition, {END: "evaluator"})
-        self.graph.add_edge("dev_agent_tools", "dev_agent")
-
-        self.graph.add_conditional_edges("evaluator", lambda state: state["route"]) # either "END" or "router"
+    if checkpoint:
+        return CompiledGraph(
+            graph=graph.compile()
+        )
+    return CompiledGraph(
+        graph=graph.compile(checkpointer=checkpointer)
+    )
+        
